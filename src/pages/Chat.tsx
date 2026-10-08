@@ -8,7 +8,9 @@ import {
   Sparkles, 
   Bot, 
   Trash2,
-  AlertCircle
+  AlertCircle,
+  Menu,
+  FileText
 } from "lucide-react";
 import { useChatStore, Message } from "../store/chatStore";
 import { TOOL_REGISTRY } from "../registry/toolRegistry";
@@ -20,6 +22,12 @@ import ChatMessageItem from "../components/chat/ChatMessageItem";
 import { VoiceTriggerButton } from "../components/voice/VoiceTriggerButton";
 import { LiveVoiceModal } from "../components/voice/LiveVoiceModal";
 
+// Expanded features
+import ConversationSidebar from "../components/chat/ConversationSidebar";
+import FileManagerDrawer from "../components/chat/FileManagerDrawer";
+import ChatAttachmentBar from "../components/chat/ChatAttachmentBar";
+import { extractFileContext } from "../utils/fileParser";
+
 export default function Chat() {
   const { 
     conversations, 
@@ -30,7 +38,9 @@ export default function Chat() {
     updateMessageStream,
     editUserMessageAndTruncate,
     truncateAfterMessage,
-    deleteConversation
+    deleteConversation,
+    currentComposerAttachmentIds,
+    clearComposerAttachments
   } = useChatStore();
 
   const [input, setInput] = useState("");
@@ -38,6 +48,10 @@ export default function Chat() {
   const [isGenerating, setIsGenerating] = useState(false);
   const [showScrollBottomBtn, setShowScrollBottomBtn] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+
+  // Responsive sidebar and file manager state
+  const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [fileManagerOpen, setFileManagerOpen] = useState(false);
 
   const { createJob } = useJobStore();
   const scrollContainerRef = useRef<HTMLDivElement>(null);
@@ -49,6 +63,20 @@ export default function Chat() {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
   const isNearBottomRef = useRef(true);
+
+  // Responsive auto-collapse sidebar on smaller viewports
+  useEffect(() => {
+    const handleResize = () => {
+      if (window.innerWidth < 768) {
+        setSidebarOpen(false);
+      } else {
+        setSidebarOpen(true);
+      }
+    };
+    handleResize();
+    window.addEventListener("resize", handleResize);
+    return () => window.removeEventListener("resize", handleResize);
+  }, []);
 
   // Auto-create initial conversation if none exists
   useEffect(() => {
@@ -83,7 +111,6 @@ export default function Chat() {
       scrollToBottom("smooth");
     }
   }, [activeConversation?.messages, scrollToBottom]);
-
 
   const handleInputChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
     const val = e.target.value;
@@ -179,9 +206,7 @@ export default function Chat() {
     }
   };
 
-  
   const executeToolCommand = async (conversationId: string, tool: any, query: string) => {
-    // Basic tool execution for chat
     const userMessage: Message = {
       id: Date.now().toString(),
       role: "user",
@@ -244,7 +269,6 @@ export default function Chat() {
     }
   };
 
-
   const handleConfirmTool = async (messageId: string) => {
     if (!activeConversationId) return;
     const currentConv = useChatStore.getState().conversations.find(c => c.id === activeConversationId);
@@ -294,6 +318,43 @@ export default function Chat() {
   const handleSend = async () => {
     if (!input.trim() || !activeConversationId || isGenerating) return;
     const currentInput = input.trim();
+    const lowerInput = currentInput.toLowerCase().replace(/[?!.]/g, "").trim();
+
+    // Intercept local chat operations before sending to AI
+    if (lowerInput === "clear chat" || lowerInput === "clear conversation" || lowerInput === "/clear" || lowerInput === "clear history") {
+      if (confirm("Are you sure you want to clear the message history for this conversation?")) {
+        useChatStore.getState().clearConversationMessages(activeConversationId);
+        setInput("");
+      }
+      return;
+    }
+
+    if (lowerInput === "clear all chats" || lowerInput === "clear all" || lowerInput === "/clearall" || lowerInput === "delete all chats") {
+      if (confirm("CRITICAL ACTION: Are you sure you want to delete ALL conversations from your history? This cannot be undone.")) {
+        useChatStore.setState({ conversations: [], activeConversationId: null });
+        setInput("");
+      }
+      return;
+    }
+
+    if (lowerInput === "delete conversation" || lowerInput === "delete chat" || lowerInput === "/delete") {
+      if (confirm("Are you sure you want to delete this conversation?")) {
+        useChatStore.getState().deleteConversation(activeConversationId);
+        setInput("");
+      }
+      return;
+    }
+
+    const renameMatch = currentInput.match(/^(?:rename conversation|rename chat|rename)\s+(?:to\s+)?(.+)$/i);
+    if (renameMatch && renameMatch[1]) {
+      const newTitle = renameMatch[1].trim();
+      if (newTitle) {
+        useChatStore.getState().renameConversation(activeConversationId, newTitle);
+        setInput("");
+        alert(`Conversation title updated to: "${newTitle}"`);
+      }
+      return;
+    }
     
     // Check explicit tool commands
     const explicitTool = detectToolFromCommand(currentInput);
@@ -309,32 +370,42 @@ export default function Chat() {
       return;
     }
 
+    // Process attachments and build document contextual grounding
+    const attachments = [...currentComposerAttachmentIds];
+    let filePreamble = "";
+    if (attachments.length > 0) {
+      filePreamble = await extractFileContext(attachments);
+      clearComposerAttachments();
+    }
+
     const userMessage: Message = {
       id: Date.now().toString(),
       role: "user",
       content: currentInput,
       timestamp: Date.now(),
+      attachmentIds: attachments, // store references locally
     };
     addMessage(activeConversationId, userMessage);
     setInput("");
+
+    // Inject document extracts for model to read
+    const refinedInput = filePreamble 
+      ? `${filePreamble}\n\n[User Message]: ${currentInput}`
+      : currentInput;
 
     const currentMessages = activeConversation?.messages || [];
     const history = currentMessages
       .filter(m => m.role !== "system")
       .map(m => ({ role: m.role, content: m.content }));
       
-    await streamChatCompletion(activeConversationId, [...history, { role: "user", content: currentInput }]);
+    await streamChatCompletion(activeConversationId, [...history, { role: "user", content: refinedInput }]);
   };
 
-
-  // User message edit & resubmit handler
   const handleEditUserMessage = async (messageId: string, newContent: string) => {
     if (!activeConversationId || isGenerating) return;
 
-    // Truncate and update store
     editUserMessageAndTruncate(activeConversationId, messageId, newContent);
 
-    // Get current updated messages
     const currentConv = useChatStore.getState().conversations.find(c => c.id === activeConversationId);
     if (!currentConv) return;
 
@@ -345,13 +416,11 @@ export default function Chat() {
     await streamChatCompletion(activeConversationId, history);
   };
 
-  // Assistant message regenerate handler
   const handleRegenerate = async (assistantMsgIndex: number) => {
     if (!activeConversationId || isGenerating) return;
     const currentConv = activeConversation;
     if (!currentConv || currentConv.messages.length === 0) return;
 
-    // Truncate everything after the prompt that generated this message
     const targetMsg = currentConv.messages[assistantMsgIndex];
     if (!targetMsg) return;
 
@@ -381,237 +450,301 @@ export default function Chat() {
   };
 
   return (
-    <div className="flex-1 flex flex-col h-full min-h-0 relative w-full">
-      {/* Header with Model Selector & New Chat */}
-      <header className="flex-shrink-0 flex items-center justify-between border-b border-white/5 pb-3 mb-2 z-10 gap-2 flex-wrap">
-        <div className="flex items-center gap-2.5">
-          <div className="p-2 rounded-xl bg-indigo-500/10 text-indigo-400 border border-indigo-500/20">
-            <Bot className="w-4 h-4" />
-          </div>
-          <div>
-            <h1 className="text-base sm:text-lg font-bold text-white tracking-tight">AI Chat</h1>
-            <p className="text-[10px] sm:text-xs text-zinc-400">Powered exclusively by Agnes AI</p>
-          </div>
-        </div>
+    <div className="flex h-full w-full bg-zinc-950 text-white overflow-hidden relative">
+      {/* Left Conversations Sidebar (Collapsable) */}
+      <div 
+        className={`hidden md:block transition-all duration-300 shrink-0 overflow-hidden h-full ${
+          sidebarOpen ? "w-64" : "w-0"
+        }`}
+      >
+        <ConversationSidebar />
+      </div>
 
-        <div className="flex items-center gap-2">
-          {/* Model Switcher */}
-          <div className="flex items-center bg-white/5 p-1 rounded-xl border border-white/10">
-            <button
-              onClick={() => setSelectedModel("agnes-3.0-flash")}
-              className={`px-2.5 py-1 text-xs font-semibold rounded-lg transition-all min-h-[32px] ${
-                selectedModel === "agnes-3.0-flash"
-                  ? "bg-indigo-600 text-white shadow-sm"
-                  : "text-zinc-400 hover:text-white"
-              }`}
-            >
-              3.0 Flash
-            </button>
-            <button
-              onClick={() => setSelectedModel("agnes-2.5-pro")}
-              className={`px-2.5 py-1 text-xs font-semibold rounded-lg transition-all min-h-[32px] ${
-                selectedModel === "agnes-2.5-pro"
-                  ? "bg-indigo-600 text-white shadow-sm"
-                  : "text-zinc-400 hover:text-white"
-              }`}
-            >
-              2.5 Pro
-            </button>
-            <button
-              onClick={() => setSelectedModel("agnes-2.5-flash")}
-              className={`px-2.5 py-1 text-xs font-semibold rounded-lg transition-all min-h-[32px] ${
-                selectedModel === "agnes-2.5-flash"
-                  ? "bg-indigo-600 text-white shadow-sm"
-                  : "text-zinc-400 hover:text-white"
-              }`}
-            >
-              2.5 Flash
-            </button>
-          </div>
-
-          <VoiceTriggerButton conversationId={activeConversationId} variant="header" />
-
-          <button
-            onClick={() => createConversation()}
-            className="flex items-center gap-1.5 px-3 py-1.5 bg-white/5 hover:bg-white/10 text-zinc-200 hover:text-white rounded-xl text-xs font-semibold border border-white/10 transition-all min-h-[36px]"
+      {/* Mobile left sidebar overlay */}
+      <AnimatePresence>
+        {sidebarOpen && (
+          <motion.div
+            initial={{ x: "-100%" }}
+            animate={{ x: 0 }}
+            exit={{ x: "-100%" }}
+            transition={{ type: "spring", damping: 25, stiffness: 220 }}
+            className="fixed inset-y-0 left-0 w-64 bg-zinc-950 border-r border-white/5 z-40 md:hidden"
           >
-            <Plus className="w-3.5 h-3.5" />
-            <span>New Chat</span>
-          </button>
-        </div>
-      </header>
+            <ConversationSidebar onClose={() => setSidebarOpen(false)} />
+          </motion.div>
+        )}
+      </AnimatePresence>
 
-      {errorMessage && (
-        <div className="p-3 bg-red-500/10 border border-red-500/20 rounded-2xl text-red-400 text-xs flex items-center justify-between gap-3 mb-2 flex-shrink-0">
-          <div className="flex items-center gap-2">
-            <AlertCircle className="w-4 h-4 flex-shrink-0" />
-            <span>{errorMessage}</span>
-          </div>
-          <button onClick={() => setErrorMessage(null)} className="text-xs hover:text-white font-bold">✕</button>
-        </div>
+      {/* Mobile left sidebar backdrop overlay */}
+      {sidebarOpen && (
+        <div 
+          onClick={() => setSidebarOpen(false)} 
+          className="fixed inset-0 bg-black/60 z-30 md:hidden backdrop-blur-sm"
+        />
       )}
 
-      {/* Messages Scroll Area */}
-      <div 
-        ref={scrollContainerRef}
-        onScroll={handleScroll}
-        className="flex-1 overflow-y-auto no-scrollbar min-h-0 py-2 sm:py-4 px-0.5 relative"
-      >
-        <div className="flex flex-col gap-3.5 sm:gap-5 max-w-4xl mx-auto w-full">
+      {/* Main Chat Frame */}
+      <div className="flex-1 flex flex-col h-full min-h-0 relative p-4 sm:p-6 overflow-hidden">
+        {/* Header with Sidebar Toggles & Title */}
+        <header className="flex-shrink-0 flex items-center justify-between border-b border-white/5 pb-3 mb-2 z-10 gap-2 flex-wrap">
+          <div className="flex items-center gap-2.5">
+            <button
+              onClick={() => setSidebarOpen(!sidebarOpen)}
+              className="p-2 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 text-zinc-300 hover:text-white transition-colors"
+              title="Toggle Conversational Sidebar"
+            >
+              <Menu className="w-4 h-4" />
+            </button>
+            <div className="p-2 rounded-xl bg-indigo-500/10 text-indigo-400 border border-indigo-500/20 hidden sm:block">
+              <Bot className="w-4 h-4" />
+            </div>
+            <div>
+              <h1 className="text-base sm:text-lg font-bold text-white tracking-tight">AI Chat</h1>
+              <p className="text-[10px] sm:text-xs text-zinc-400">Powered exclusively by Agnes AI</p>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2">
+            {/* Model Switcher */}
+            <div className="flex items-center bg-white/5 p-1 rounded-xl border border-white/10">
+              <button
+                onClick={() => setSelectedModel("agnes-3.0-flash")}
+                className={`px-2.5 py-1 text-xs font-semibold rounded-lg transition-all min-h-[32px] ${
+                  selectedModel === "agnes-3.0-flash"
+                    ? "bg-indigo-600 text-white shadow-sm"
+                    : "text-zinc-400 hover:text-white"
+                }`}
+              >
+                3.0 Flash
+              </button>
+              <button
+                onClick={() => setSelectedModel("agnes-2.5-pro")}
+                className={`px-2.5 py-1 text-xs font-semibold rounded-lg transition-all min-h-[32px] ${
+                  selectedModel === "agnes-2.5-pro"
+                    ? "bg-indigo-600 text-white shadow-sm"
+                    : "text-zinc-400 hover:text-white"
+                }`}
+              >
+                2.5 Pro
+              </button>
+              <button
+                onClick={() => setSelectedModel("agnes-2.5-flash")}
+                className={`px-2.5 py-1 text-xs font-semibold rounded-lg transition-all min-h-[32px] ${
+                  selectedModel === "agnes-2.5-flash"
+                    ? "bg-indigo-600 text-white shadow-sm"
+                    : "text-zinc-400 hover:text-white"
+                }`}
+              >
+                2.5 Flash
+              </button>
+            </div>
+
+            {/* File Manager Drawer Toggle Button */}
+            <button
+              onClick={() => setFileManagerOpen(true)}
+              className="relative p-2 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 text-zinc-300 hover:text-white transition-colors"
+              title="Open File Attachments Manager"
+            >
+              <FileText className="w-4 h-4" />
+              {currentComposerAttachmentIds.length > 0 && (
+                <span className="absolute -top-1 -right-1 w-4 h-4 rounded-full bg-indigo-600 text-white text-[9px] font-bold flex items-center justify-center border border-zinc-950">
+                  {currentComposerAttachmentIds.length}
+                </span>
+              )}
+            </button>
+
+            <VoiceTriggerButton conversationId={activeConversationId} variant="header" />
+
+            <button
+              onClick={() => createConversation()}
+              className="flex items-center gap-1.5 px-3 py-1.5 bg-white/5 hover:bg-white/10 text-zinc-200 hover:text-white rounded-xl text-xs font-semibold border border-white/10 transition-all min-h-[36px]"
+            >
+              <Plus className="w-3.5 h-3.5" />
+              <span className="hidden sm:inline">New Chat</span>
+            </button>
+          </div>
+        </header>
+
+        {errorMessage && (
+          <div className="p-3 bg-red-500/10 border border-red-500/20 rounded-2xl text-red-400 text-xs flex items-center justify-between gap-3 mb-2 flex-shrink-0">
+            <div className="flex items-center gap-2">
+              <AlertCircle className="w-4 h-4 flex-shrink-0" />
+              <span>{errorMessage}</span>
+            </div>
+            <button onClick={() => setErrorMessage(null)} className="text-xs hover:text-white font-bold">✕</button>
+          </div>
+        )}
+
+        {/* Messages Scroll Area */}
+        <div 
+          ref={scrollContainerRef}
+          onScroll={handleScroll}
+          className="flex-1 overflow-y-auto no-scrollbar min-h-0 py-2 sm:py-4 px-0.5 relative"
+        >
+          <div className="flex flex-col gap-3.5 sm:gap-5 max-w-4xl mx-auto w-full">
+            <AnimatePresence>
+              {(!activeConversation || activeConversation.messages.length === 0) && (
+                <motion.div 
+                  initial={{ opacity: 0, y: 10 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  className="flex flex-col items-center justify-center text-center text-zinc-500 my-16 text-xs sm:text-sm px-4 gap-3"
+                >
+                  <div className="w-12 h-12 rounded-2xl bg-indigo-500/10 border border-indigo-500/20 text-indigo-400 flex items-center justify-center shadow-lg">
+                    <Sparkles className="w-6 h-6" />
+                  </div>
+                  <p className="font-medium text-zinc-300">Welcome to XKIRA AI Chat</p>
+                  <p className="text-zinc-500 max-w-md text-xs">
+                    Ask questions, formulate complex scripts, brainstorm cinematic scenes, use attachment files, or execute creative workflows.
+                  </p>
+                </motion.div>
+              )}
+              
+              {activeConversation?.messages.map((m, idx) => (
+                <ChatMessageItem
+                  key={m.id}
+                  message={m}
+                  isLastAssistant={idx === activeConversation.messages.length - 1}
+                  isGenerating={isGenerating}
+                  onEditUserMessage={handleEditUserMessage}
+                  onRegenerate={() => handleRegenerate(idx)}
+                  onConfirmTool={handleConfirmTool}
+                  onCancelTool={handleCancelTool}
+                />
+              ))}
+            </AnimatePresence>
+            <div ref={messagesEndRef} />
+          </div>
+        </div>
+
+        {/* Floating Jump-to-Bottom Button */}
+        {showScrollBottomBtn && (
+          <button
+            onClick={() => scrollToBottom("smooth")}
+            className="absolute bottom-20 right-4 sm:right-8 z-30 p-2.5 bg-indigo-600/90 hover:bg-indigo-600 text-white rounded-full shadow-2xl border border-indigo-400/30 flex items-center gap-1.5 text-xs font-semibold backdrop-blur-md transition-all active:scale-95"
+          >
+            <ArrowDown className="w-4 h-4" />
+            <span className="hidden sm:inline">Jump to latest</span>
+          </button>
+        )}
+
+        {/* Suggestions and Tool Recommendation Popover */}
+        <div className="flex-shrink-0 pt-2 max-w-4xl mx-auto w-full z-20 relative">
           <AnimatePresence>
-            {(!activeConversation || activeConversation.messages.length === 0) && (
+            {showToolSuggestions && toolSuggestions.length > 0 && (
               <motion.div 
                 initial={{ opacity: 0, y: 10 }}
                 animate={{ opacity: 1, y: 0 }}
-                className="flex flex-col items-center justify-center text-center text-zinc-500 my-16 text-xs sm:text-sm px-4 gap-3"
+                exit={{ opacity: 0, y: 10 }}
+                className="absolute bottom-full left-0 w-full mb-2 bg-zinc-900 border border-zinc-800 rounded-xl overflow-hidden shadow-2xl z-30"
               >
-                <div className="w-12 h-12 rounded-2xl bg-indigo-500/10 border border-indigo-500/20 text-indigo-400 flex items-center justify-center shadow-lg">
-                  <Sparkles className="w-6 h-6" />
+                <div className="p-2 text-xs font-semibold text-zinc-400 border-b border-zinc-800 uppercase tracking-wider">
+                  Select Tool
                 </div>
-                <p className="font-medium text-zinc-300">Welcome to XKIRA AI Chat</p>
-                <p className="text-zinc-500 max-w-md text-xs">
-                  Ask questions, formulate complex scripts, brainstorm cinematic scenes, or generate creative workflows with Agnes AI.
-                </p>
+                <div className="max-h-48 overflow-y-auto">
+                  {toolSuggestions.map((tool, idx) => (
+                    <button
+                      key={tool.id}
+                      className={`w-full flex items-center gap-3 px-3 py-2.5 text-left transition-colors ${idx === selectedToolIndex ? 'bg-indigo-600/20 text-white' : 'text-zinc-300 hover:bg-zinc-800'}`}
+                      onClick={() => insertToolSuggestion(tool)}
+                      onMouseEnter={() => setSelectedToolIndex(idx)}
+                    >
+                      <tool.icon className="w-4 h-4 flex-shrink-0 text-indigo-400" />
+                      <div>
+                        <div className="text-sm font-semibold">{tool.name}</div>
+                        <div className="text-xs text-zinc-500">{tool.description}</div>
+                      </div>
+                      <div className="ml-auto text-xs font-mono text-zinc-600 bg-black/20 px-1.5 py-0.5 rounded">{tool.chatTrigger}</div>
+                    </button>
+                  ))}
+                </div>
               </motion.div>
             )}
-            
-            {activeConversation?.messages.map((m, idx) => (
-              <ChatMessageItem
-                key={m.id}
-                message={m}
-                isLastAssistant={idx === activeConversation.messages.length - 1}
-                isGenerating={isGenerating}
-                onEditUserMessage={handleEditUserMessage}
-                onRegenerate={() => handleRegenerate(idx)}
-                onConfirmTool={handleConfirmTool}
-                onCancelTool={handleCancelTool}
-              />
-            ))}
-          </AnimatePresence>
-          <div ref={messagesEndRef} />
-        </div>
-      </div>
 
-      {/* Floating Jump-to-Bottom Button */}
-      {showScrollBottomBtn && (
-        <button
-          onClick={() => scrollToBottom("smooth")}
-          className="absolute bottom-20 right-4 sm:right-8 z-30 p-2.5 bg-indigo-600/90 hover:bg-indigo-600 text-white rounded-full shadow-2xl border border-indigo-400/30 flex items-center gap-1.5 text-xs font-semibold backdrop-blur-md transition-all active:scale-95"
-        >
-          <ArrowDown className="w-4 h-4" />
-          <span className="hidden sm:inline">Jump to latest</span>
-        </button>
-      )}
-
-      
-      {/* Suggestions and Tool UI */}
-      <div className="flex-shrink-0 pt-2 max-w-4xl mx-auto w-full z-20 relative">
-        <AnimatePresence>
-          {showToolSuggestions && toolSuggestions.length > 0 && (
-            <motion.div 
-              initial={{ opacity: 0, y: 10 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: 10 }}
-              className="absolute bottom-full left-0 w-full mb-2 bg-zinc-900 border border-zinc-800 rounded-xl overflow-hidden shadow-2xl z-30"
-            >
-              <div className="p-2 text-xs font-semibold text-zinc-400 border-b border-zinc-800 uppercase tracking-wider">
-                Select Tool
-              </div>
-              <div className="max-h-48 overflow-y-auto">
-                {toolSuggestions.map((tool, idx) => (
+            {suggestedTool && !showToolSuggestions && (
+              <motion.div
+                initial={{ opacity: 0, scale: 0.95 }}
+                animate={{ opacity: 1, scale: 1 }}
+                exit={{ opacity: 0, scale: 0.95 }}
+                className="absolute bottom-full left-0 w-full mb-2 p-3 bg-zinc-900 border border-indigo-500/30 rounded-xl shadow-2xl z-20 flex items-center justify-between"
+              >
+                <div className="flex items-center gap-3">
+                  <div className="w-8 h-8 rounded-full bg-indigo-500/20 flex items-center justify-center text-indigo-400">
+                    <suggestedTool.icon className="w-4 h-4" />
+                  </div>
+                  <div>
+                    <div className="text-xs text-indigo-300 font-semibold mb-0.5">✨ Recommended Tool</div>
+                    <div className="text-sm text-white">{suggestedTool.name}</div>
+                  </div>
+                </div>
+                <div className="flex items-center gap-2">
                   <button
-                    key={tool.id}
-                    className={`w-full flex items-center gap-3 px-3 py-2.5 text-left transition-colors ${idx === selectedToolIndex ? 'bg-indigo-600/20 text-white' : 'text-zinc-300 hover:bg-zinc-800'}`}
-                    onClick={() => insertToolSuggestion(tool)}
-                    onMouseEnter={() => setSelectedToolIndex(idx)}
+                    onClick={() => setSuggestedTool(null)}
+                    className="px-3 py-1.5 text-xs text-zinc-400 hover:text-white transition-colors"
                   >
-                    <tool.icon className="w-4 h-4 flex-shrink-0 text-indigo-400" />
-                    <div>
-                      <div className="text-sm font-semibold">{tool.name}</div>
-                      <div className="text-xs text-zinc-500">{tool.description}</div>
-                    </div>
-                    <div className="ml-auto text-xs font-mono text-zinc-600 bg-black/20 px-1.5 py-0.5 rounded">{tool.chatTrigger}</div>
+                    Dismiss
                   </button>
-                ))}
-              </div>
-            </motion.div>
-          )}
-
-          {suggestedTool && !showToolSuggestions && (
-            <motion.div
-              initial={{ opacity: 0, scale: 0.95 }}
-              animate={{ opacity: 1, scale: 1 }}
-              exit={{ opacity: 0, scale: 0.95 }}
-              className="absolute bottom-full left-0 w-full mb-2 p-3 bg-zinc-900 border border-indigo-500/30 rounded-xl shadow-2xl z-20 flex items-center justify-between"
-            >
-              <div className="flex items-center gap-3">
-                <div className="w-8 h-8 rounded-full bg-indigo-500/20 flex items-center justify-center text-indigo-400">
-                  <suggestedTool.icon className="w-4 h-4" />
+                  <button
+                    onClick={() => {
+                      if (activeConversationId) {
+                        executeToolCommand(activeConversationId, suggestedTool, input);
+                        setSuggestedTool(null);
+                      }
+                    }}
+                    className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold rounded-lg shadow-md transition-all active:scale-95"
+                  >
+                    Use Tool
+                  </button>
                 </div>
-                <div>
-                  <div className="text-xs text-indigo-300 font-semibold mb-0.5">✨ Recommended Tool</div>
-                  <div className="text-sm text-white">{suggestedTool.name}</div>
-                </div>
-              </div>
-              <div className="flex items-center gap-2">
-                <button
-                  onClick={() => setSuggestedTool(null)}
-                  className="px-3 py-1.5 text-xs text-zinc-400 hover:text-white transition-colors"
-                >
-                  Dismiss
-                </button>
-                <button
-                  onClick={() => {
-                    if (activeConversationId) {
-                      executeToolCommand(activeConversationId, suggestedTool, input);
-                      setSuggestedTool(null);
-                    }
-                  }}
-                  className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold rounded-lg shadow-md transition-all active:scale-95"
-                >
-                  Use Tool
-                </button>
-              </div>
-            </motion.div>
-          )}
-        </AnimatePresence>
-      </div>
-      {/* Input composer area - Pinned at bottom */}
-
-      <div className="flex-shrink-0 pt-2 pb-safe max-w-4xl mx-auto w-full z-20">
-        <div className="bg-zinc-900/95 backdrop-blur-2xl border border-zinc-800 p-1.5 sm:p-2 rounded-2xl sm:rounded-3xl flex items-end gap-1.5 sm:gap-2 shadow-2xl transition-all focus-within:border-indigo-500/50 focus-within:shadow-[0_0_30px_rgba(99,102,241,0.15)]">
-          <textarea 
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={handleKeyDown}
-            placeholder="Message XKIRA..."
-            className="flex-1 bg-transparent text-white placeholder-zinc-500 resize-none outline-none max-h-32 min-h-[40px] sm:min-h-[44px] py-2 px-3 text-xs sm:text-sm font-sans min-w-0"
-            rows={1}
-          />
-          <VoiceTriggerButton conversationId={activeConversationId} variant="composer" />
-          {isGenerating ? (
-            <button 
-              onClick={handleStop}
-              className="p-2.5 sm:p-3 bg-red-500/20 text-red-400 hover:bg-red-500/30 rounded-xl sm:rounded-2xl transition-colors flex-shrink-0 min-h-[44px] min-w-[44px] flex items-center justify-center"
-              aria-label="Stop generation"
-            >
-              <Square className="w-4 h-4 fill-current" />
-            </button>
-          ) : (
-            <button 
-              onClick={handleSend}
-              disabled={!input.trim()}
-              className="p-2.5 sm:p-3 bg-white text-black hover:bg-zinc-200 disabled:opacity-40 disabled:hover:bg-white rounded-xl sm:rounded-2xl transition-colors shadow-lg flex-shrink-0 min-h-[44px] min-w-[44px] flex items-center justify-center active:scale-95"
-              aria-label="Send message"
-            >
-              <Send className="w-4 h-4" />
-            </button>
-          )}
+              </motion.div>
+            )}
+          </AnimatePresence>
         </div>
+
+        {/* Input Composer Panel */}
+        <div className="flex-shrink-0 pt-2 pb-safe max-w-4xl mx-auto w-full z-20">
+          {/* Active Attached Files Shelf */}
+          <ChatAttachmentBar />
+
+          <div className="bg-zinc-900/95 backdrop-blur-2xl border border-zinc-800 p-1.5 sm:p-2 rounded-2xl sm:rounded-3xl flex items-end gap-1.5 sm:gap-2 shadow-2xl transition-all focus-within:border-indigo-500/50 focus-within:shadow-[0_0_30px_rgba(99,102,241,0.15)]">
+            <textarea 
+              value={input}
+              onChange={handleInputChange}
+              onKeyDown={handleKeyDown}
+              placeholder="Message XKIRA..."
+              className="flex-1 bg-transparent text-white placeholder-zinc-500 resize-none outline-none max-h-32 min-h-[40px] sm:min-h-[44px] py-2 px-3 text-xs sm:text-sm font-sans min-w-0"
+              rows={1}
+            />
+            <VoiceTriggerButton conversationId={activeConversationId} variant="composer" />
+            {isGenerating ? (
+              <button 
+                onClick={handleStop}
+                className="p-2.5 sm:p-3 bg-red-500/20 text-red-400 hover:bg-red-500/30 rounded-xl sm:rounded-2xl transition-colors flex-shrink-0 min-h-[44px] min-w-[44px] flex items-center justify-center"
+                aria-label="Stop generation"
+              >
+                <Square className="w-4 h-4 fill-current" />
+              </button>
+            ) : (
+              <button 
+                onClick={handleSend}
+                disabled={!input.trim() && currentComposerAttachmentIds.length === 0}
+                className="p-2.5 sm:p-3 bg-white text-black hover:bg-zinc-200 disabled:opacity-40 disabled:hover:bg-white rounded-xl sm:rounded-2xl transition-colors shadow-lg flex-shrink-0 min-h-[44px] min-w-[44px] flex items-center justify-center active:scale-95"
+                aria-label="Send message"
+              >
+                <Send className="w-4 h-4" />
+              </button>
+            )}
+          </div>
+        </div>
+
+        {/* XKIRA Live Voice Session Modal */}
+        <LiveVoiceModal />
       </div>
 
-      {/* XKIRA Live Voice Session Modal */}
-      <LiveVoiceModal />
+      {/* Right File Manager Sliding Drawer */}
+      <FileManagerDrawer 
+        isOpen={fileManagerOpen}
+        onClose={() => setFileManagerOpen(false)}
+      />
     </div>
   );
 }

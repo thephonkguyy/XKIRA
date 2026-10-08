@@ -41,6 +41,29 @@ export interface NormalizedApiError {
   };
 }
 
+export function isRateLimitOrQuotaError(status: number, errorText?: string): boolean {
+  if (status === 429) return true;
+  if (!errorText || typeof errorText !== "string") return false;
+  const lower = errorText.toLowerCase();
+  return (
+    lower.includes("rate limit") ||
+    lower.includes("token plan") ||
+    lower.includes("free users") ||
+    lower.includes("insufficient quota") ||
+    lower.includes("credit balance") ||
+    lower.includes("quota exceeded") ||
+    lower.includes("account quota") ||
+    lower.includes("too many requests") ||
+    lower.includes("rate_limit") ||
+    lower.includes("limit reached") ||
+    lower.includes("concurrency limit") ||
+    lower.includes("exceeded your current quota") ||
+    lower.includes("out of credits") ||
+    lower.includes("quota_exceeded") ||
+    lower.includes("upgrade to a token plan")
+  );
+}
+
 export function createNormalizedError(
   message: string,
   status = 500,
@@ -48,7 +71,14 @@ export function createNormalizedError(
   requestId?: string
 ): NormalizedApiError {
   let normalizedCode = code;
-  if (status === 401) normalizedCode = "unauthorized";
+  let normalizedStatus = status;
+
+  if (isRateLimitOrQuotaError(status, message)) {
+    normalizedCode = "rate_limit_exceeded";
+    if (status < 400 || status === 500) {
+      normalizedStatus = 429;
+    }
+  } else if (status === 401) normalizedCode = "unauthorized";
   else if (status === 400) normalizedCode = "invalid_request";
   else if (status === 403) normalizedCode = "forbidden";
   else if (status === 429) normalizedCode = "rate_limit_exceeded";
@@ -60,7 +90,7 @@ export function createNormalizedError(
       code: normalizedCode,
       message,
       provider: "agnes",
-      status,
+      status: normalizedStatus,
       ...(requestId ? { requestId } : {}),
     },
   };

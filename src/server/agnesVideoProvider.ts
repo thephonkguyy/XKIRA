@@ -12,7 +12,7 @@
  */
 
 import https from "node:https";
-import { getNormalizedAgnesApiKey, getAllAvailableAgnesKeys, createNormalizedError, AGNES_BASE_URL } from "./agnesService";
+import { getNormalizedAgnesApiKey, getAllAvailableAgnesKeys, createNormalizedError, isRateLimitOrQuotaError, AGNES_BASE_URL } from "./agnesService";
 import { agnesKeyManager } from "./agnes/agnesKeyManager";
 
 export interface NormalizedVideoRequest {
@@ -110,9 +110,14 @@ async function sendAgnesRequest(
     const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
     try {
+      const reqHeaders = { ...options.headers };
+      if (options.body) {
+        reqHeaders["Content-Length"] = Buffer.byteLength(options.body, "utf8").toString();
+      }
+
       const res = await fetch(urlStr, {
         method: options.method,
-        headers: options.headers,
+        headers: reqHeaders,
         body: options.body,
         signal: controller.signal,
       });
@@ -133,9 +138,9 @@ async function sendAgnesRequest(
 
       // Check for upstream transient socket drop
       if (res.status === 400 && responseBody.includes("Failed to read request body")) {
-        console.warn(`[VIDEO] Upstream socket dropped body (attempt ${attempt}/3). Retrying in 250ms...`);
+        console.warn(`[VIDEO] Upstream socket dropped body (attempt ${attempt}/3). Retrying in ${attempt * 300}ms...`);
         if (attempt < 3) {
-          await new Promise((r) => setTimeout(r, 250));
+          await new Promise((r) => setTimeout(r, attempt * 300));
           continue;
         }
       }
@@ -147,7 +152,7 @@ async function sendAgnesRequest(
         throw new Error(`Request to ${urlStr} timed out after ${timeoutMs}ms`);
       }
       if (attempt < 3) {
-        await new Promise((r) => setTimeout(r, 250));
+        await new Promise((r) => setTimeout(r, attempt * 300));
         continue;
       }
       throw err;
@@ -335,16 +340,16 @@ export async function createAgnesVideoJob(
         parsed?.message ||
         (typeof parsed?.error === "string" ? parsed.error : `HTTP ${response.status}`);
 
-      if (response.status === 429) {
+      if (isRateLimitOrQuotaError(response.status, errorMsg)) {
         agnesKeyManager.recordRateLimit(keySlot.id, {
           retryAfterHeader: response.headers["retry-after"] as string,
           errorText: errorMsg,
-          status: 429,
+          status: response.status,
         });
 
         const nextKey = agnesKeyManager.selectKey(triedKeyIds);
         if (nextKey) {
-          console.log(`[VIDEO] Rate limit on ${keySlot.id}. Auto-failover to ${nextKey.id}...`);
+          console.log(`[VIDEO] Rate limit / quota error on ${keySlot.id}. Auto-failover to ${nextKey.id}...`);
           continue;
         }
 
@@ -371,6 +376,21 @@ export async function createAgnesVideoJob(
         break;
       }
 
+      if (response.status === 403) {
+        agnesKeyManager.recordDisabledKey(keySlot.id, errorMsg);
+        const nextKey = agnesKeyManager.selectKey(triedKeyIds);
+        if (nextKey) {
+          console.log(`[VIDEO] ${keySlot.id} disabled (HTTP 403). Auto-failover to ${nextKey.id}...`);
+          continue;
+        }
+        lastError = {
+          status: 403,
+          error: errorMsg,
+          code: "forbidden",
+        };
+        break;
+      }
+
       if ([500, 502, 503, 504, 520].includes(response.status)) {
         agnesKeyManager.recordServerError(keySlot.id, response.status);
         const nextKey = agnesKeyManager.selectKey(triedKeyIds);
@@ -388,11 +408,39 @@ export async function createAgnesVideoJob(
 
       // Check if 400 is upstream socket drop (Failed to read request body)
       if (response.status === 400 && errorMsg.includes("Failed to read request body")) {
+        agnesKeyManager.recordGenericError(keySlot.id);
         const nextKey = agnesKeyManager.selectKey(triedKeyIds);
         if (nextKey) {
           console.log(`[VIDEO] Upstream body read dropped on ${keySlot.id}. Auto-failover to ${nextKey.id}...`);
           continue;
         }
+        lastError = {
+          status: 503,
+          error: "Upstream video processing service temporarily dropped the request payload. Please retry shortly.",
+          code: "provider_error",
+        };
+        break;
+      }
+
+      // Check if 503 or queue full
+      if (
+        response.status === 503 ||
+        errorMsg.includes("video queue is full") ||
+        errorMsg.includes("video_queue_full") ||
+        errorMsg.includes("queue is full")
+      ) {
+        agnesKeyManager.recordServerError(keySlot.id, 503);
+        const nextKey = agnesKeyManager.selectKey(triedKeyIds);
+        if (nextKey) {
+          console.log(`[VIDEO] Upstream video queue full on ${keySlot.id}. Auto-failover to ${nextKey.id}...`);
+          continue;
+        }
+        lastError = {
+          status: 503,
+          error: "Agnes AI video generation queue is currently full. Please retry in a few moments.",
+          code: "provider_busy",
+        };
+        break;
       }
 
       // 400 Bad Request / 404: Client parameter error
@@ -493,10 +541,8 @@ export async function getAgnesVideoJob(
     triedKeyIds.add(keySlot.id);
 
     try {
-      // Primary endpoint
-      const primaryUrl = `https://apihub.agnes-ai.com/agnesapi?video_id=${encodeURIComponent(
-        targetVideoId
-      )}&model_name=${encodeURIComponent(targetModel)}`;
+      // Primary endpoint for One-API / Agnes video task polling
+      const primaryUrl = `https://apihub.agnes-ai.com/v1/videos/${encodeURIComponent(targetVideoId)}`;
 
       res = await sendAgnesRequest(primaryUrl, {
         method: "GET",
@@ -510,7 +556,7 @@ export async function getAgnesVideoJob(
 
       // Fallback endpoint if primary 404s or 5xx
       if (res.status === 404 || res.status >= 500) {
-        const fallbackUrl = `${AGNES_BASE_URL}/videos/${encodeURIComponent(targetVideoId)}`;
+        const fallbackUrl = `https://apihub.agnes-ai.com/v1/video/generations/${encodeURIComponent(targetVideoId)}`;
         try {
           const fbRes = await sendAgnesRequest(fallbackUrl, {
             method: "GET",
@@ -545,12 +591,27 @@ export async function getAgnesVideoJob(
         parsed?.message ||
         `HTTP ${res.status} retrieving video status`;
 
-      // Gracefully handle task not found without throwing 500
+      // Gracefully handle task not found without throwing 500 or crashing polling loop
       if (
         res.status === 404 ||
         parsed?.code === "task_not_exist" ||
-        String(errorMsg).toLowerCase().includes("task not found")
+        String(errorMsg).toLowerCase().includes("task not found") ||
+        String(errorMsg).toLowerCase().includes("task_not_exist") ||
+        String(errorMsg).toLowerCase().includes("not exist")
       ) {
+        // If the task was just queued recently (< 90 seconds), upstream propagation might still be pending
+        const isRecent = cached && (Date.now() - cached.createdAt < 90000);
+        if (isRecent) {
+          return {
+            success: true,
+            jobId: cached?.jobId || idParam,
+            videoId: targetVideoId,
+            status: "QUEUED",
+            progress: cached.progress || "15%",
+            note: "Task pending in upstream processing pipeline...",
+          };
+        }
+
         if (cached) {
           cached.status = "FAILED";
           cached.error = "Task not found on upstream provider.";
@@ -596,6 +657,19 @@ export async function getAgnesVideoJob(
         break;
       }
 
+      if (res.status === 403) {
+        if (keySlot.id !== "fallback") {
+          agnesKeyManager.recordDisabledKey(keySlot.id, errorMsg);
+        }
+        const nextKey = agnesKeyManager.selectKey(triedKeyIds);
+        if (nextKey) {
+          console.log(`[VIDEO-POLL] ${keySlot.id} disabled (HTTP 403). Failover to ${nextKey.id}...`);
+          continue;
+        }
+        lastPollError = { status: 403, error: errorMsg, code: "forbidden" };
+        break;
+      }
+
       if ([500, 502, 503, 504, 520].includes(res.status)) {
         if (keySlot.id !== "fallback") {
           agnesKeyManager.recordServerError(keySlot.id, res.status);
@@ -627,10 +701,25 @@ export async function getAgnesVideoJob(
   }
 
   if (!res || (res.status >= 400 && lastPollError)) {
-    throw lastPollError || {
-      status: 500,
-      error: "Unable to retrieve video status across available API keys.",
-      code: "status_check_failed",
+    // If cached exists and was processing/queued, return cached status rather than failing poll
+    if (cached && (cached.status === "QUEUED" || cached.status === "PROCESSING")) {
+      return {
+        success: true,
+        jobId: cached.jobId,
+        videoId: targetVideoId,
+        status: cached.status,
+        progress: cached.progress || "50%",
+        note: "Status check paused awaiting rate limit cooldown...",
+      };
+    }
+    // Return clean failure response rather than unhandled exception
+    return {
+      success: true,
+      jobId: cached?.jobId || idParam,
+      videoId: targetVideoId,
+      status: "FAILED",
+      progress: "0%",
+      error: lastPollError?.error || "Unable to retrieve video status across available API keys.",
     };
   }
 

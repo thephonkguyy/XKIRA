@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { 
   Copy, 
   Check, 
@@ -8,10 +8,12 @@ import {
   CheckCheck,
   Code2,
   Sparkles,
-  AlertCircle
+  AlertCircle,
+  FileText
 } from "lucide-react";
 import { Message } from "../../store/chatStore";
 import { shareMedia } from "../../utils/shareService";
+import { IndexedDBManager, AttachmentFile } from "../../utils/indexedDb";
 
 export interface ChatMessageItemProps {
   key?: React.Key;
@@ -38,6 +40,25 @@ export default function ChatMessageItem({
   const [copied, setCopied] = useState(false);
   const [copiedCodeIdx, setCopiedCodeIdx] = useState<number | null>(null);
   const [shareFeedback, setShareFeedback] = useState<string | null>(null);
+  const [msgFiles, setMsgFiles] = useState<AttachmentFile[]>([]);
+
+  useEffect(() => {
+    if (message.attachmentIds && message.attachmentIds.length > 0) {
+      const fetchFiles = async () => {
+        const loaded: AttachmentFile[] = [];
+        for (const id of message.attachmentIds!) {
+          try {
+            const f = await IndexedDBManager.getFile(id);
+            if (f) loaded.push(f);
+          } catch (e) {
+            console.error("Failed to load message attachment:", id, e);
+          }
+        }
+        setMsgFiles(loaded);
+      };
+      fetchFiles();
+    }
+  }, [message.attachmentIds]);
 
   const handleCopyMessage = async () => {
     try {
@@ -275,6 +296,22 @@ export default function ChatMessageItem({
             }`}
           >
             {renderFormattedContent(message.content)}
+
+            {/* Render message attachments if present */}
+            {msgFiles.length > 0 && (
+              <div className="flex flex-wrap gap-1.5 mt-2.5 pt-2 border-t border-white/5">
+                {msgFiles.map(f => (
+                  <div 
+                    key={f.id} 
+                    className="flex items-center gap-1 px-2 py-0.5 bg-black/40 border border-white/5 rounded-lg text-[10px] text-zinc-300 font-semibold"
+                  >
+                    <FileText className="w-3 h-3 text-indigo-400 shrink-0" />
+                    <span className="truncate max-w-[120px]" title={f.name}>{f.name}</span>
+                    <span className="text-[9px] text-zinc-500 font-medium shrink-0">({(f.size/1024).toFixed(0)}KB)</span>
+                  </div>
+                ))}
+              </div>
+            )}
 
             {/* Pulsing cursor while generating empty response */}
             {isGenerating && isLastAssistant && message.content === "" && (

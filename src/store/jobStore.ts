@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
 import { safeExtractError } from '../lib/utils';
 import { safeParseApiResponse } from '../lib/safeResponseParser';
+import { authenticatedFetch } from '../utils/authenticatedFetch';
 
 export type JobStatus = 'QUEUED' | 'STARTING' | 'PROCESSING' | 'COMPLETED' | 'FAILED' | 'CANCELLED' | 'STALE' | 'EXPIRED';
 
@@ -240,7 +241,7 @@ export function startJobPolling(jobId: string) {
     const pollUrl = `/api/agnes/videos/generations/${encodeURIComponent(targetVideoId)}?model_name=${encodeURIComponent(job.model || 'agnes-video-v2.0')}`;
 
     try {
-      const res = await fetch(pollUrl);
+      const res = await authenticatedFetch(pollUrl);
       
       // Handle non-200 HTTP responses safely without hanging pollers
       if (!res.ok) {

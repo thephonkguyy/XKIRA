@@ -14,6 +14,8 @@ import { useJobStore } from "../../store/jobStore";
 import { useProjectStore } from "../../store/projectStore";
 import { safeExtractError } from "../../lib/utils";
 import { prepareReferenceAsset } from "../../utils/mediaValidator";
+import { useAuthStore } from "../../store/authStore";
+import { authenticatedFetch } from "../../utils/authenticatedFetch";
 import { 
   AspectRatio, 
   Resolution, 
@@ -187,7 +189,7 @@ export default function NormalVideoStudio() {
     setErrorMsg(null);
 
     try {
-      const res = await fetch("/api/agnes/chat/completions", {
+      const res = await authenticatedFetch("/api/agnes/chat/completions", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -257,7 +259,7 @@ export default function NormalVideoStudio() {
         prompt: fullPrompt.substring(0, 50) + "...",
       });
 
-      const res = await fetch("/api/agnes/videos/generations", {
+      const res = await authenticatedFetch("/api/agnes/videos/generations", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload)

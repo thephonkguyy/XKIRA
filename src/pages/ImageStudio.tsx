@@ -17,6 +17,7 @@ import { useJobStore } from "../store/jobStore";
 import { useProjectStore } from "../store/projectStore";
 import { safeExtractError } from "../lib/utils";
 import { safeParseApiResponse, extractValidImageUrl } from "../lib/safeResponseParser";
+import { authenticatedFetch } from "../utils/authenticatedFetch";
 import ImageActionToolbar from "../components/media/ImageActionToolbar";
 import ImageUploadZone from "../components/media/ImageUploadZone";
 import FullscreenMediaModal, { FullscreenMediaItem } from "../components/media/FullscreenMediaModal";
@@ -47,6 +48,7 @@ export default function ImageStudio() {
   const [searchParams] = useSearchParams();
   const refImageParam = searchParams.get("refImage");
   const promptParam = searchParams.get("prompt");
+  const editPromptParam = searchParams.get("editPrompt");
 
   const [activeTab, setActiveTab] = useState<Tab>("generate");
   const [prompt, setPrompt] = useState("");
@@ -87,10 +89,14 @@ export default function ImageStudio() {
   useEffect(() => {
     if (refImageParam) {
       setEditReferenceUrl(refImageParam);
-      if (promptParam) setEditPrompt(promptParam);
       setActiveTab("edit");
     }
-  }, [refImageParam, promptParam]);
+    if (editPromptParam) {
+      setEditPrompt(editPromptParam);
+    } else if (promptParam && !prompt) {
+      setPrompt(promptParam);
+    }
+  }, [refImageParam, promptParam, editPromptParam]);
 
   // Auto-save project fields safely
   useEffect(() => {
@@ -138,7 +144,7 @@ export default function ImageStudio() {
         messages: [{ role: "user", content: `Enhance the following prompt to make it a highly detailed, cinematic, and descriptive image generation prompt: "${targetPrompt}". Return ONLY the enhanced prompt text, without any conversational filler or introductory text.` }]
       };
 
-      const res = await fetch("/api/agnes/chat/completions", {
+      const res = await authenticatedFetch("/api/agnes/chat/completions", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
@@ -183,7 +189,7 @@ export default function ImageStudio() {
     });
 
     try {
-      const res = await fetch("/api/agnes/images/generations", {
+      const res = await authenticatedFetch("/api/agnes/images/generations", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -246,20 +252,16 @@ export default function ImageStudio() {
   };
 
   const handleGenerateEditVariation = async () => {
-    if (!editPrompt.trim() || isGenerating) return;
+    const trimmedEditPrompt = editPrompt.trim();
+    if (!trimmedEditPrompt || isGenerating) return;
     setIsGenerating(true);
     setErrorMsg(null);
-
-    // Combine reference context with editing prompt
-    const combinedPrompt = editReferenceUrl 
-      ? `High-quality cinematic visual variation: ${editPrompt}. Maintaining visual aesthetic, high fidelity, 8k render.`
-      : editPrompt;
 
     const jobId = createJob({
       type: 'image',
       tool: 'Image Studio',
       model: 'agnes-image-2.5-flash',
-      prompt: combinedPrompt,
+      prompt: trimmedEditPrompt,
       inputUri: editReferenceUrl || undefined,
       status: 'PROCESSING',
       progress: 'Generating edited image variation...'
@@ -269,7 +271,7 @@ export default function ImageStudio() {
       const endpoint = editReferenceUrl ? "/api/agnes/images/edits" : "/api/agnes/images/generations";
       const payload: any = {
         model: "agnes-image-2.5-flash",
-        prompt: combinedPrompt,
+        prompt: trimmedEditPrompt,
         n: 1,
         size: "1024x1024"
       };
@@ -277,7 +279,7 @@ export default function ImageStudio() {
         payload.image = editReferenceUrl;
       }
 
-      const res = await fetch(endpoint, {
+      const res = await authenticatedFetch(endpoint, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload)
@@ -296,6 +298,28 @@ export default function ImageStudio() {
           resultUrl: imageUrl,
           progress: '100%'
         });
+
+        // Add version & recent item for this new edit record (preserving original generation history)
+        if (currentProject) {
+          addProjectVersion(currentProject.projectId, {
+            prompt: trimmedEditPrompt,
+            resultUrl: imageUrl,
+            thumbnail: imageUrl,
+            model: 'agnes-image-2.5-flash',
+          });
+          addRecentItem({
+            itemId: `img_edit_${Date.now()}`,
+            type: 'image',
+            title: trimmedEditPrompt.substring(0, 40),
+            thumbnail: imageUrl,
+            status: 'COMPLETED',
+            projectId: currentProject.projectId,
+            tool: 'Image Studio',
+            prompt: trimmedEditPrompt,
+            remoteReference: imageUrl,
+            model: 'agnes-image-2.5-flash',
+          });
+        }
       } else {
         throw new Error("No image URL returned in response.");
       }
@@ -332,7 +356,7 @@ export default function ImageStudio() {
         ]
       };
 
-      const res = await fetch("/api/agnes/chat/completions", {
+      const res = await authenticatedFetch("/api/agnes/chat/completions", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
@@ -357,10 +381,14 @@ export default function ImageStudio() {
     }
   };
 
-  // Switch to Edit tab with this image pre-loaded
+  // Open the existing Image Edit workflow with the selected image attached as source
   const handleEditThisImage = (url: string) => {
+    if (!url) return;
     setEditReferenceUrl(url);
-    setEditPrompt(prompt ? `Modify: ${prompt}` : "Transform this image with cinematic lighting and enhanced details");
+    // Preserve the user's existing prompt exactly.
+    // Do NOT prepend "Modify:" or append instructions.
+    // Do NOT mutate original prompt.
+    // Preserve editPrompt if the user has already entered one.
     setActiveTab("edit");
   };
 
@@ -374,7 +402,7 @@ export default function ImageStudio() {
       type: "image",
       url,
       title: "Generated Image",
-      prompt: prompt || latestJob?.prompt,
+      prompt: activeTab === "edit" ? (editPrompt || prompt) : (prompt || latestJob?.prompt),
     });
   };
 

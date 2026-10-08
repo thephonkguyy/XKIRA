@@ -17,6 +17,8 @@ import { MemoryManager, defaultMemoryManager } from "../memory";
 import { TOOL_REGISTRY, ToolDefinition } from "../../registry/toolRegistry";
 import { safeExtractError } from "../../lib/utils";
 import { safeParseApiResponse, extractValidImageUrl } from "../../lib/safeResponseParser";
+import { useAuthStore } from "../../store/authStore";
+import { authenticatedFetch } from "../../utils/authenticatedFetch";
 
 export class AICore {
   public readonly models: ModelRegistry;
@@ -89,7 +91,7 @@ export class AICore {
       temperature: options.temperature ?? 0.7,
     };
 
-    const res = await fetch("/api/agnes/chat/completions", {
+    const res = await authenticatedFetch("/api/agnes/chat/completions", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
@@ -146,7 +148,7 @@ export class AICore {
       size: options.size || "1024x1024",
     };
 
-    const res = await fetch("/api/agnes/images/generations", {
+    const res = await authenticatedFetch("/api/agnes/images/generations", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
@@ -202,7 +204,7 @@ export class AICore {
       jobId: options.jobId,
     };
 
-    const res = await fetch("/api/agnes/videos/generations", {
+    const res = await authenticatedFetch("/api/agnes/videos/generations", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),

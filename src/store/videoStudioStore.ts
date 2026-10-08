@@ -322,8 +322,8 @@ async function runSceneQueueWorker(storeGet: () => VideoStudioState) {
           progressMessage: "Processing in Agnes background queue..."
         });
 
-        // Enforce 63s interval before next clip dispatch to adhere to 1 req/min
-        nextAllowedSceneDispatchTimestamp = Date.now() + 63000;
+        // Minimal 500ms safety gap between scene dispatches (multi-key pool handles rate limits)
+        nextAllowedSceneDispatchTimestamp = Date.now() + 500;
         pendingSceneQueue.shift();
 
       } catch (err: any) {

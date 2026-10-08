@@ -1,0 +1,8 @@
+{
+	"appId": "com.xkira.ai",
+	"appName": "XKIRA",
+	"webDir": "dist",
+	"server": {
+		"androidScheme": "https"
+	}
+}

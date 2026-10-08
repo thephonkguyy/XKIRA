@@ -4,6 +4,8 @@ import { defaultChatMemoryManager } from "./chatMemory";
 import { safeExtractError } from "../../lib/utils";
 import { useJobStore } from "../../store/jobStore";
 import { safeParseApiResponse, extractValidImageUrl } from "../../lib/safeResponseParser";
+import { useAuthStore } from "../../store/authStore";
+import { authenticatedFetch } from "../../utils/authenticatedFetch";
 
 export class ToolRouter {
   /**
@@ -61,7 +63,28 @@ export class ToolRouter {
     opts: { modelOverride?: string; systemPromptOverride?: string; signal?: AbortSignal }
   ): Promise<ToolExecutionResult> {
     const model = opts.modelOverride || tool.defaultModel || "agnes-2.5-flash";
-    const systemPrompt = opts.systemPromptOverride || tool.systemPrompt || "You are an expert AI assistant.";
+    let systemPrompt = opts.systemPromptOverride || tool.systemPrompt || "You are an expert AI assistant.";
+
+    // Active real-time search grounding for research tools
+    if (tool.id === "web-search" || tool.id === "deep-research") {
+      try {
+        console.log(`[ToolRouter] Performing dynamic search grounding for tool: ${tool.id}`);
+        const searchRes = await fetch(`/api/search/web?q=${encodeURIComponent(userPrompt)}`);
+        if (searchRes.ok) {
+          const searchData = await searchRes.json();
+          if (searchData.success && searchData.results && searchData.results.length > 0) {
+            const searchContext = searchData.results.map((r: any, idx: number) => {
+              return `[Source ${idx + 1}]: ${r.title}\nURL: ${r.url}\nSnippet: ${r.snippet}`;
+            }).join("\n\n");
+
+            systemPrompt = `${systemPrompt}\n\nGround your answer using the following live search results. Make sure to cite source URLs in your answer using bracketed numbers (e.g. [1]).\n\n--- SEARCH GROUNDING ---\n${searchContext}\n--- END SEARCH GROUNDING ---`;
+            console.log(`[ToolRouter] Grounded query successfully with ${searchData.results.length} active listings.`);
+          }
+        }
+      } catch (err) {
+        console.warn("[ToolRouter] Failed to fetch live search listings:", err);
+      }
+    }
 
     const messages = defaultChatMemoryManager.prepareChatPayload(
       [{ role: "user", content: userPrompt }],
@@ -69,7 +92,7 @@ export class ToolRouter {
     );
 
     try {
-      const res = await fetch("/api/agnes/chat/completions", {
+      const res = await authenticatedFetch("/api/agnes/chat/completions", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({

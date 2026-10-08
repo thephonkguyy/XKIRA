@@ -12,10 +12,12 @@ import {
   WifiOff,
   Menu,
   X,
-  Sparkles
+  Sparkles,
+  User
 } from "lucide-react";
 import { cn } from "../../lib/utils";
 import { useState, useEffect } from "react";
+import { useAuthStore } from "../../store/authStore";
 import JobCenter from "./JobCenter";
 
 const NAV_ITEMS = [
@@ -40,6 +42,7 @@ const MOBILE_PRIMARY_TABS = [
 export default function Layout() {
   const navigate = useNavigate();
   const location = useLocation();
+  const user = useAuthStore(state => state.user);
   const [isOffline, setIsOffline] = useState(!navigator.onLine);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
@@ -191,7 +194,25 @@ export default function Layout() {
           ))}
         </nav>
 
-        <div className="p-3 lg:p-4 border-t border-white/5">
+        <div className="p-3 lg:p-4 border-t border-white/5 space-y-1">
+          <NavLink 
+            to="/auth"
+            className={({ isActive }) =>
+              cn(
+                "w-full flex items-center justify-center lg:justify-start gap-3.5 px-3 lg:px-4 py-3 rounded-2xl transition-all duration-200 group outline-none",
+                isActive
+                  ? "bg-white/10 text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.1)] border border-white/5 font-semibold"
+                  : "text-zinc-400 hover:bg-white/5 hover:text-zinc-200"
+              )
+            }
+            title={user ? "Profile" : "Sign In"}
+          >
+            <User className="w-5 h-5 flex-shrink-0 group-hover:scale-105 transition-transform duration-200 text-indigo-400" />
+            <span className="hidden lg:block text-xs font-medium truncate">
+              {user ? user.username : "Sign In"}
+            </span>
+          </NavLink>
+
           <NavLink 
             to="/settings"
             className={({ isActive }) =>

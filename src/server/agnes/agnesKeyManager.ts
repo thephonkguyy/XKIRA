@@ -373,6 +373,23 @@ export class AgnesKeyManager {
   }
 
   /**
+   * Records key restriction / account disability (HTTP 403 Forbidden).
+   */
+  public recordDisabledKey(keyId: string, reason?: string): void {
+    const slot = this.slots.find((s) => s.id === keyId);
+    if (!slot) return;
+
+    slot.lastUsedAt = Date.now();
+    slot.stats.totalRequests++;
+    slot.stats.invalidCount++;
+    slot.state = "DISABLED";
+    slot.cooldownUntil = null;
+    console.error(
+      `[AgnesKeyManager] ${slot.id} (${slot.sourceEnv}) marked DISABLED (HTTP 403 Forbidden: ${reason || "Account/Key restricted"}). Excluded from rotation.`
+    );
+  }
+
+  /**
    * Records general request without state change (e.g. 400 Bad Request, parameter error).
    */
   public recordGenericError(keyId: string): void {
