@@ -242,12 +242,18 @@ export function startJobPolling(jobId: string) {
     try {
       const res = await fetch(pollUrl);
       
-      // Handle non-200 HTTP responses safely without immediate job failure
+      // Handle non-200 HTTP responses safely without hanging pollers
       if (!res.ok) {
-        if (res.status === 404 && attempts < 5) {
+        if (res.status === 404 && attempts < 3) {
           scheduleNextPoll(5000);
           return;
         }
+        activePollers.delete(jobId);
+        useJobStore.getState().updateJob(jobId, {
+          status: 'FAILED',
+          error: 'Video generation task was not found or has expired.'
+        });
+        return;
       }
 
       const parsed = await safeParseApiResponse(res, "Failed to poll video generation status.");

@@ -260,22 +260,25 @@ async function runSceneQueueWorker(storeGet: () => VideoStudioState) {
       });
 
       try {
+        const isImg2Video = !!inputImageRef;
         const payload: any = {
-          model: "agnes-video-v2.0",
+          model: "agnes-video-2.5-flash",
           prompt: fullPrompt,
-          duration: freshScene.durationSeconds
+          mode: isImg2Video ? "img2video" : "text",
+          seconds: freshScene.durationSeconds,
+          size: "720P",
+          aspect_ratio: "16:9",
+          n: 1,
+          ...(isImg2Video ? { first_frame: inputImageRef } : {}),
         };
 
         console.log(`[Diagnostic] StoryCreator starting scene generation. Job params:`, {
           sceneId: sceneId,
           duration: freshScene.durationSeconds,
           model: payload.model,
+          mode: payload.mode,
           prompt: fullPrompt.substring(0, 50) + "...",
         });
-
-        if (inputImageRef) {
-          payload.image = inputImageRef;
-        }
 
         const res = await fetch("/api/agnes/videos/generations", {
           method: "POST",
@@ -284,11 +287,15 @@ async function runSceneQueueWorker(storeGet: () => VideoStudioState) {
         });
 
         const resText = await res.text();
-        if (!res.ok) {
-          throw new Error(safeExtractError(resText, res.status));
-        }
+        let data: any = {};
+        try {
+          data = JSON.parse(resText);
+        } catch {}
 
-        const data = JSON.parse(resText);
+        if (!res.ok) {
+          const errorMsg = data?.error?.message || (typeof data?.error === "string" ? data.error : null) || data?.message || safeExtractError(resText, res.status);
+          throw new Error(errorMsg);
+        }
         const vId = data.video_id || data.id || data.task_id || `vid_${Date.now()}`;
         const tId = data.task_id || data.id || data.video_id || vId;
 
@@ -299,7 +306,7 @@ async function runSceneQueueWorker(storeGet: () => VideoStudioState) {
           taskId: tId,
           type: "video",
           tool: "Video Studio",
-          model: "agnes-video-v2.0",
+          model: "agnes-video-2.5-flash",
           prompt: fullPrompt,
           duration: freshScene.durationSeconds,
           status: "PROCESSING",
@@ -323,18 +330,26 @@ async function runSceneQueueWorker(storeGet: () => VideoStudioState) {
         console.error(`Failed to queue scene ${freshScene.sceneNumber}:`, err);
         const errMsg = err.message || "Generation request failed.";
         const errLower = errMsg.toLowerCase();
+        const isPlanQuota = 
+          errLower.includes("token plan") || 
+          errLower.includes("free users") || 
+          errLower.includes("insufficient quota") || 
+          errLower.includes("credit balance");
+
         const isTransientError = 
-          errLower.includes("rate limit") || 
-          errLower.includes("2 requests per 1 minute") || 
-          errLower.includes("1 requests per 1 minute") || 
-          errLower.includes("429") ||
-          errLower.includes("queue is full") ||
-          errLower.includes("502") ||
-          errLower.includes("503") ||
-          errLower.includes("504") ||
-          errLower.includes("bad gateway") ||
-          errLower.includes("html error response") ||
-          errLower.includes("unexpected token");
+          !isPlanQuota && (
+            errLower.includes("rate limit") || 
+            errLower.includes("2 requests per 1 minute") || 
+            errLower.includes("1 requests per 1 minute") || 
+            errLower.includes("429") ||
+            errLower.includes("queue is full") ||
+            errLower.includes("502") ||
+            errLower.includes("503") ||
+            errLower.includes("504") ||
+            errLower.includes("bad gateway") ||
+            errLower.includes("html error response") ||
+            errLower.includes("unexpected token")
+          );
 
         if (isTransientError && (freshScene.retries || 0) < 10) {
           const backoff = errLower.includes("queue is full") ? 60000 : 30000;
@@ -560,7 +575,7 @@ export const useVideoStudioStore = create<VideoStudioState>()(
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
-              model: "agnes-image-2.1-flash",
+              model: "agnes-image-2.5-flash",
               prompt,
             }),
           });

@@ -17,6 +17,8 @@ import { useJobStore } from "../store/jobStore";
 import { safeExtractError } from "../lib/utils";
 import { aiCore } from "../core/ai";
 import ChatMessageItem from "../components/chat/ChatMessageItem";
+import { VoiceTriggerButton } from "../components/voice/VoiceTriggerButton";
+import { LiveVoiceModal } from "../components/voice/LiveVoiceModal";
 
 export default function Chat() {
   const { 
@@ -32,7 +34,7 @@ export default function Chat() {
   } = useChatStore();
 
   const [input, setInput] = useState("");
-  const [selectedModel, setSelectedModel] = useState<"agnes-2.5-flash" | "agnes-2.5-pro">("agnes-2.5-flash");
+  const [selectedModel, setSelectedModel] = useState<"agnes-3.0-flash" | "agnes-2.5-pro" | "agnes-2.5-flash">("agnes-3.0-flash");
   const [isGenerating, setIsGenerating] = useState(false);
   const [showScrollBottomBtn, setShowScrollBottomBtn] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -261,6 +263,7 @@ export default function Chat() {
         toolId: msg.toolCall.toolId,
         userPrompt,
         conversationId: activeConversationId,
+        confirmed: true,
       });
 
       if (result.status === "COMPLETED" && result.result) {
@@ -296,6 +299,13 @@ export default function Chat() {
     const explicitTool = detectToolFromCommand(currentInput);
     if (explicitTool) {
       await executeToolCommand(activeConversationId, explicitTool.tool, explicitTool.query);
+      return;
+    }
+
+    // Check natural language intents (e.g. generate image, make a picture, create video, animate image, edit image)
+    const naturalTool = detectToolFromIntent(currentInput);
+    if (naturalTool && (naturalTool.id === "image-studio" || naturalTool.id === "video-studio")) {
+      await executeToolCommand(activeConversationId, naturalTool, currentInput);
       return;
     }
 
@@ -388,14 +398,14 @@ export default function Chat() {
           {/* Model Switcher */}
           <div className="flex items-center bg-white/5 p-1 rounded-xl border border-white/10">
             <button
-              onClick={() => setSelectedModel("agnes-2.5-flash")}
+              onClick={() => setSelectedModel("agnes-3.0-flash")}
               className={`px-2.5 py-1 text-xs font-semibold rounded-lg transition-all min-h-[32px] ${
-                selectedModel === "agnes-2.5-flash"
+                selectedModel === "agnes-3.0-flash"
                   ? "bg-indigo-600 text-white shadow-sm"
                   : "text-zinc-400 hover:text-white"
               }`}
             >
-              2.5 Flash
+              3.0 Flash
             </button>
             <button
               onClick={() => setSelectedModel("agnes-2.5-pro")}
@@ -407,7 +417,19 @@ export default function Chat() {
             >
               2.5 Pro
             </button>
+            <button
+              onClick={() => setSelectedModel("agnes-2.5-flash")}
+              className={`px-2.5 py-1 text-xs font-semibold rounded-lg transition-all min-h-[32px] ${
+                selectedModel === "agnes-2.5-flash"
+                  ? "bg-indigo-600 text-white shadow-sm"
+                  : "text-zinc-400 hover:text-white"
+              }`}
+            >
+              2.5 Flash
+            </button>
           </div>
+
+          <VoiceTriggerButton conversationId={activeConversationId} variant="header" />
 
           <button
             onClick={() => createConversation()}
@@ -566,6 +588,7 @@ export default function Chat() {
             className="flex-1 bg-transparent text-white placeholder-zinc-500 resize-none outline-none max-h-32 min-h-[40px] sm:min-h-[44px] py-2 px-3 text-xs sm:text-sm font-sans min-w-0"
             rows={1}
           />
+          <VoiceTriggerButton conversationId={activeConversationId} variant="composer" />
           {isGenerating ? (
             <button 
               onClick={handleStop}
@@ -586,6 +609,9 @@ export default function Chat() {
           )}
         </div>
       </div>
+
+      {/* XKIRA Live Voice Session Modal */}
+      <LiveVoiceModal />
     </div>
   );
 }

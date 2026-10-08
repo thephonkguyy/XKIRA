@@ -233,7 +233,7 @@ export const TOOL_REGISTRY: Record<string, ToolDefinition> = {
     description: "Generate images with Agnes Image models.",
     icon: Sparkles,
     outputType: "image",
-    defaultModel: "agnes-image-v2",
+    defaultModel: "agnes-image-2.5-flash",
     chatTrigger: "@image",
     requiresConfirmation: true
   },
@@ -244,7 +244,7 @@ export const TOOL_REGISTRY: Record<string, ToolDefinition> = {
     description: "Generate video with Agnes Video models.",
     icon: Sparkles,
     outputType: "video",
-    defaultModel: "agnes-video-v2.0",
+    defaultModel: "agnes-video-2.5-flash",
     chatTrigger: "@video",
     requiresConfirmation: true
   }

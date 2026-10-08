@@ -189,14 +189,16 @@ export class AICore {
       refinedPrompt = `${refinedPrompt}. Continuity direction: ${options.continuityPrompt}`;
     }
 
+    const isImg2Video = !!options.inputUri || !!options.imageUri;
     const payload = {
       model,
       prompt: refinedPrompt,
-      duration: options.duration || 5,
-      fps: options.fps || 24,
-      resolution: options.resolution || "1280x720",
-      inputUri: options.inputUri,
-      imageUri: options.imageUri,
+      mode: isImg2Video ? "img2video" : "text",
+      seconds: options.duration || 5,
+      size: "720P",
+      aspect_ratio: "16:9",
+      n: 1,
+      ...(isImg2Video ? { first_frame: options.inputUri || options.imageUri } : {}),
       jobId: options.jobId,
     };
 

@@ -148,21 +148,43 @@ export async function safeParseApiResponse<T = any>(
 export function extractValidImageUrl(data: any): string | null {
   if (!data) return null;
   
-  if (data.data && Array.isArray(data.data) && data.data.length > 0) {
-    const item = data.data[0];
-    if (typeof item === 'string' && item.startsWith('http')) return item;
-    if (item?.url && typeof item.url === 'string') return item.url;
-    if (item?.b64_json && typeof item.b64_json === 'string') {
-      return item.b64_json.startsWith('data:') 
-        ? item.b64_json 
-        : `data:image/png;base64,${item.b64_json}`;
+  // 1. Direct top-level url (from normalized responses like { success: true, url: "..." })
+  if (typeof data.url === 'string' && data.url.trim().length > 0) {
+    const trimmed = data.url.trim();
+    if (trimmed.startsWith('http') || trimmed.startsWith('data:') || trimmed.startsWith('/')) {
+      return trimmed;
     }
   }
 
-  if (typeof data.url === 'string' && data.url.startsWith('http')) return data.url;
-  if (data.result?.url && typeof data.result.url === 'string') return data.result.url;
-  if (Array.isArray(data.images) && data.images.length > 0 && typeof data.images[0] === 'string') return data.images[0];
-  if (typeof data.outputUrl === 'string' && data.outputUrl.startsWith('http')) return data.outputUrl;
+  // 2. Direct top-level imageUrl
+  if (typeof data.imageUrl === 'string' && data.imageUrl.trim().length > 0) {
+    const trimmed = data.imageUrl.trim();
+    if (trimmed.startsWith('http') || trimmed.startsWith('data:') || trimmed.startsWith('/')) {
+      return trimmed;
+    }
+  }
+
+  // 3. Nested data array (OpenAI / Agnes standard { data: [ { url, b64_json } ] })
+  if (data.data && Array.isArray(data.data) && data.data.length > 0) {
+    const item = data.data[0];
+    if (typeof item === 'string' && item.trim().length > 0) return item.trim();
+    if (item?.url && typeof item.url === 'string' && item.url.trim().length > 0) return item.url.trim();
+    if (item?.b64_json && typeof item.b64_json === 'string' && item.b64_json.trim().length > 0) {
+      const b64 = item.b64_json.trim();
+      return b64.startsWith('data:') ? b64 : `data:image/png;base64,${b64}`;
+    }
+  }
+
+  // 4. Top-level b64_json
+  if (typeof data.b64_json === 'string' && data.b64_json.trim().length > 0) {
+    const b64 = data.b64_json.trim();
+    return b64.startsWith('data:') ? b64 : `data:image/png;base64,${b64}`;
+  }
+
+  // 5. Provider alternative formats
+  if (data.result?.url && typeof data.result.url === 'string') return data.result.url.trim();
+  if (Array.isArray(data.images) && data.images.length > 0 && typeof data.images[0] === 'string') return data.images[0].trim();
+  if (typeof data.outputUrl === 'string' && data.outputUrl.trim().length > 0) return data.outputUrl.trim();
 
   return null;
 }

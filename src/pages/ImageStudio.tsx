@@ -134,7 +134,7 @@ export default function ImageStudio() {
     setErrorMsg(null);
     try {
       const payload = {
-        model: "agnes-2.5-flash",
+        model: "agnes-3.0-flash",
         messages: [{ role: "user", content: `Enhance the following prompt to make it a highly detailed, cinematic, and descriptive image generation prompt: "${targetPrompt}". Return ONLY the enhanced prompt text, without any conversational filler or introductory text.` }]
       };
 
@@ -176,7 +176,7 @@ export default function ImageStudio() {
     const jobId = createJob({
       type: 'image',
       tool: 'Image Studio',
-      model: 'agnes-image-2.1-flash',
+      model: 'agnes-image-2.5-flash',
       prompt: prompt,
       status: 'PROCESSING',
       progress: 'Rendering image...'
@@ -187,7 +187,7 @@ export default function ImageStudio() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          model: "agnes-image-2.1-flash",
+          model: "agnes-image-2.5-flash",
           prompt: prompt,
           n: 1,
           size: "1024x1024"
@@ -214,7 +214,7 @@ export default function ImageStudio() {
             prompt,
             resultUrl: imageUrl,
             thumbnail: imageUrl,
-            model: 'agnes-image-2.1-flash',
+            model: 'agnes-image-2.5-flash',
           });
           addRecentItem({
             itemId: `img_${Date.now()}`,
@@ -226,7 +226,7 @@ export default function ImageStudio() {
             tool: 'Image Studio',
             prompt: prompt,
             remoteReference: imageUrl,
-            model: 'agnes-image-2.1-flash',
+            model: 'agnes-image-2.5-flash',
           });
         }
       } else {
@@ -258,7 +258,7 @@ export default function ImageStudio() {
     const jobId = createJob({
       type: 'image',
       tool: 'Image Studio',
-      model: 'agnes-image-2.1-flash',
+      model: 'agnes-image-2.5-flash',
       prompt: combinedPrompt,
       inputUri: editReferenceUrl || undefined,
       status: 'PROCESSING',
@@ -266,15 +266,21 @@ export default function ImageStudio() {
     });
 
     try {
-      const res = await fetch("/api/agnes/images/generations", {
+      const endpoint = editReferenceUrl ? "/api/agnes/images/edits" : "/api/agnes/images/generations";
+      const payload: any = {
+        model: "agnes-image-2.5-flash",
+        prompt: combinedPrompt,
+        n: 1,
+        size: "1024x1024"
+      };
+      if (editReferenceUrl) {
+        payload.image = editReferenceUrl;
+      }
+
+      const res = await fetch(endpoint, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          model: "agnes-image-2.1-flash",
-          prompt: combinedPrompt,
-          n: 1,
-          size: "1024x1024"
-        })
+        body: JSON.stringify(payload)
       });
 
       const parsed = await safeParseApiResponse(res, "Failed to generate image variation.");
@@ -314,7 +320,7 @@ export default function ImageStudio() {
 
     try {
       const payload = {
-        model: "agnes-2.5-flash",
+        model: "agnes-3.0-flash",
         messages: [
           {
             role: "user",

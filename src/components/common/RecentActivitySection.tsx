@@ -17,7 +17,8 @@ import {
   Play,
   Film,
   Music,
-  ArrowRight
+  ArrowRight,
+  FileJson
 } from "lucide-react";
 import { useProjectStore } from "../../store/projectStore";
 import { useChatStore } from "../../store/chatStore";
@@ -26,8 +27,10 @@ import { RecentItem, AssetType, XKIRAProject } from "../../types/project";
 import { formatDistanceToNow } from "date-fns";
 import { downloadMedia } from "../../utils/downloadService";
 import { shareMedia } from "../../utils/shareService";
+import { exportManifestJson } from "../../utils/manifestExportService";
 import FullscreenMediaModal, { FullscreenMediaItem } from "../media/FullscreenMediaModal";
 import DeletionSafetyModal from "../media/DeletionSafetyModal";
+import ExportManifestModal from "../history/ExportManifestModal";
 
 type FilterTab = "all" | "projects" | "images" | "videos" | "files" | "chats";
 
@@ -53,9 +56,21 @@ export default function RecentActivitySection({
   const [search, setSearch] = useState("");
   const [fullscreenMedia, setFullscreenMedia] = useState<FullscreenMediaItem | null>(null);
 
+  // Export Manifest Modal State
+  const [isExportModalOpen, setIsExportModalOpen] = useState(false);
+
   // Deletion Safety Modal State
   const [deleteTarget, setDeleteTarget] = useState<RecentItem | null>(null);
   const [referencedProjects, setReferencedProjects] = useState<XKIRAProject[]>([]);
+
+  const handleExportSingleItemManifest = (item: RecentItem, e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (item.type === 'project' && item.projectId) {
+      exportManifestJson({ singleProjectId: item.projectId });
+    } else {
+      exportManifestJson({ singleItemId: item.itemId });
+    }
+  };
 
   // Aggregate jobs into recents if not already present
   const allJobs = Object.values(jobs).sort((a, b) => b.createdAt - a.createdAt);
@@ -216,16 +231,27 @@ export default function RecentActivitySection({
           <p className="text-xs text-zinc-400">{subtitle}</p>
         </div>
 
-        {/* Search */}
-        <div className="relative w-full sm:w-64">
-          <Search className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-zinc-500" />
-          <input
-            type="text"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            placeholder="Search projects, prompts, files..."
-            className="w-full bg-zinc-900 border border-zinc-800 rounded-xl py-1.5 pl-9 pr-3 text-xs text-white placeholder-zinc-500 outline-none focus:border-indigo-500 transition-colors"
-          />
+        {/* Search & Export Manifest Actions */}
+        <div className="flex items-center gap-2 w-full sm:w-auto">
+          <div className="relative flex-1 sm:w-64">
+            <Search className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-zinc-500" />
+            <input
+              type="text"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Search projects, prompts, files..."
+              className="w-full bg-zinc-900 border border-zinc-800 rounded-xl py-1.5 pl-9 pr-3 text-xs text-white placeholder-zinc-500 outline-none focus:border-indigo-500 transition-colors"
+            />
+          </div>
+
+          <button
+            onClick={() => setIsExportModalOpen(true)}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-indigo-600/20 hover:bg-indigo-600 border border-indigo-500/30 text-indigo-300 hover:text-white text-xs font-semibold transition-all whitespace-nowrap shadow-sm hover:shadow-indigo-500/20"
+            title="Export past AI-generated media projects & history as a JSON manifest file"
+          >
+            <FileJson className="w-3.5 h-3.5 text-indigo-400 hover:text-white" />
+            <span>Export Manifest (JSON)</span>
+          </button>
         </div>
       </div>
 
@@ -359,11 +385,20 @@ export default function RecentActivitySection({
                           prompt: item.prompt || item.title
                         })}
                         className="p-1.5 text-zinc-400 hover:text-white rounded-lg hover:bg-zinc-800"
-                        title="Download"
+                        title="Download Media File"
                       >
                         <Download className="w-3.5 h-3.5" />
                       </button>
                     )}
+
+                    {/* Export Single Item Manifest JSON */}
+                    <button
+                      onClick={(e) => handleExportSingleItemManifest(item, e)}
+                      className="p-1.5 text-zinc-400 hover:text-indigo-300 rounded-lg hover:bg-zinc-800"
+                      title="Export Item JSON Manifest"
+                    >
+                      <FileJson className="w-3.5 h-3.5" />
+                    </button>
 
                     {/* Delete */}
                     <button
@@ -406,6 +441,14 @@ export default function RecentActivitySection({
           onClose={() => setDeleteTarget(null)}
         />
       )}
+
+      {/* Export Manifest JSON Modal */}
+      <ExportManifestModal
+        isOpen={isExportModalOpen}
+        onClose={() => setIsExportModalOpen(false)}
+        defaultFilterType={activeTab}
+        searchQuery={search}
+      />
 
     </div>
   );

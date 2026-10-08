@@ -123,12 +123,29 @@ export default function ChatMessageItem({
             </div>
           )}
           
-          {message.toolCall.status === 'COMPLETED' && message.toolCall.result && (
-
-            <div className="p-3 bg-zinc-950 border border-zinc-800 rounded-xl text-zinc-200 text-sm whitespace-pre-wrap font-mono overflow-x-auto">
-              {message.toolCall.result}
-            </div>
-          )}
+          {message.toolCall.status === 'COMPLETED' && message.toolCall.result && (() => {
+            const imgMatch = message.toolCall.result.match(/!\[.*?\]\((https?:\/\/[^\s)]+|data:image\/[^\s)]+)\)/);
+            if (imgMatch) {
+              const imgUrl = imgMatch[1];
+              return (
+                <div className="flex flex-col gap-2 my-2">
+                  <div className="rounded-2xl overflow-hidden border border-zinc-800 bg-zinc-950/60 shadow-xl max-w-md">
+                    <img src={imgUrl} alt="Generated Art" className="w-full h-auto object-cover max-h-96" />
+                  </div>
+                  <div className="flex items-center gap-2 text-xs text-zinc-400">
+                    <a href={imgUrl} target="_blank" rel="noopener noreferrer" className="text-indigo-400 hover:underline">
+                      Open full resolution
+                    </a>
+                  </div>
+                </div>
+              );
+            }
+            return (
+              <div className="p-3 bg-zinc-950 border border-zinc-800 rounded-xl text-zinc-200 text-sm whitespace-pre-wrap font-mono overflow-x-auto">
+                {message.toolCall.result}
+              </div>
+            );
+          })()}
           {message.toolCall.status === 'FAILED' && message.toolCall.error && (
             <div className="p-3 bg-red-500/10 border border-red-500/30 rounded-xl text-red-400 text-xs flex items-start gap-2">
               <AlertCircle className="w-4 h-4 mt-0.5 flex-shrink-0" />

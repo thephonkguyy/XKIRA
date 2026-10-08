@@ -118,6 +118,7 @@ export interface ToolExecutionOptions {
   signal?: AbortSignal;
   onStatusChange?: (status: 'PENDING' | 'RUNNING' | 'COMPLETED' | 'FAILED' | 'AWAITING_CONFIRMATION' | 'CANCELLED') => void;
   onChunk?: (chunk: string) => void;
+  confirmed?: boolean;
 }
 
 export interface ToolExecutionResult {

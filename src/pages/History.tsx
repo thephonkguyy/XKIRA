@@ -7,7 +7,7 @@ export default function History() {
       <div className="max-w-6xl mx-auto w-full py-4">
         <RecentActivitySection
           title="Creative Archive & Recent Activity"
-          subtitle="Explore, search, resume projects, download media, and manage your assets"
+          subtitle="Explore, search, resume projects, download media assets, and export JSON manifest archives for local storage"
           maxItems={200}
         />
       </div>

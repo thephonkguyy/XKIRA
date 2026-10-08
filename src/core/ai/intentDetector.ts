@@ -10,28 +10,30 @@ interface IntentRule {
 }
 
 const INTENT_RULES: IntentRule[] = [
-  // 1. Explicit Image Generation
+  // 1. Explicit Image Generation / Image Editing
   {
     intent: "IMAGE_GENERATION",
     toolId: "image-studio",
     patterns: [
-      /^(generate|create|render|make|draw|paint)\s+(an?\s+)?(image|picture|photo|illustration|concept\s*art|render|artwork|portrait|wallpaper)/i,
-      /^(image|picture|photo)\s+of\s+/i,
+      /\b(generate|create|render|make|draw|paint)\s+(an?\s+)?(image|picture|photo|illustration|concept\s*art|render|artwork|portrait|wallpaper)\b/i,
+      /\b(edit\s+(this|the|an?)\s+image|modify\s+(this|the)\s+image|image\s+edit|image\s+variation|change\s+this\s+image)\b/i,
+      /\b(image|picture|photo)\s+of\s+/i,
       /\b(photorealistic|hyperrealistic|cinematic\s+shot|render\s+in\s+4k)\b/i,
     ],
-    confidence: 0.92,
+    confidence: 0.95,
     requiresConfirmation: true,
   },
-  // 2. Explicit Video Generation
+  // 2. Explicit Video Generation / Image-to-Video
   {
     intent: "VIDEO_GENERATION",
     toolId: "video-studio",
     patterns: [
-      /^(generate|create|render|make|animate)\s+(an?\s+)?(video|clip|animation|footage|cinematic\s+sequence|movie\s+scene)/i,
-      /^(video|clip)\s+of\s+/i,
+      /\b(generate|create|render|make|animate)\s+(an?\s+)?(cinematic\s+)?(video|clip|animation|footage|cinematic\s+sequence|movie\s+scene)\b/i,
+      /\b(animate\s+(this|the|an?)\s+image|image\s+to\s+video|img2video)\b/i,
+      /\b(video|clip)\s+of\s+/i,
       /\b(animate\s+this|camera\s+pan|slow\s+motion\s+video|cinematic\s+video)\b/i,
     ],
-    confidence: 0.92,
+    confidence: 0.95,
     requiresConfirmation: true,
   },
   // 3. Summarization

@@ -22,9 +22,17 @@ export class ToolRouter {
       };
     }
 
-    // 1. If tool requires user confirmation and hasn't been pre-confirmed
-    if (tool.requiresConfirmation && options.onStatusChange) {
-      options.onStatusChange("AWAITING_CONFIRMATION");
+    // 1. If tool requires user confirmation and hasn't been explicitly confirmed, WAIT!
+    if (tool.requiresConfirmation && !options.confirmed) {
+      if (options.onStatusChange) {
+        options.onStatusChange("AWAITING_CONFIRMATION");
+      }
+      return {
+        toolId,
+        toolName: tool.name,
+        status: "AWAITING_CONFIRMATION",
+        result: `Confirmation required to run ${tool.name}.`,
+      };
     }
 
     // 2. Route by category / outputType
@@ -113,7 +121,7 @@ export class ToolRouter {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          model: tool.defaultModel || "agnes-image-2.1-flash",
+          model: tool.defaultModel || "agnes-image-2.5-flash",
           prompt,
           n: 1,
           size: "1024x1024",
@@ -160,10 +168,12 @@ export class ToolRouter {
   ): Promise<ToolExecutionResult> {
     const { createJob, updateJob } = useJobStore.getState();
 
+    const model = tool.defaultModel || "agnes-video-2.5-flash";
+
     const jobId = createJob({
       type: "video",
       tool: tool.name,
-      model: tool.defaultModel || "agnes-video-v2.0",
+      model,
       prompt,
       status: "QUEUED",
       progress: "Initializing video rendering pipeline...",
@@ -174,11 +184,13 @@ export class ToolRouter {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          model: tool.defaultModel || "agnes-video-v2.0",
+          model,
           prompt,
-          duration: 5,
-          fps: 24,
-          resolution: "1280x720",
+          mode: "text",
+          seconds: 5,
+          size: "720P",
+          aspect_ratio: "16:9",
+          n: 1,
           jobId,
         }),
         signal,

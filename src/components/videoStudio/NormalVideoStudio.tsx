@@ -235,23 +235,27 @@ export default function NormalVideoStudio() {
     const fullPrompt = `${prompt.trim()}. Style: ${style}, Camera: ${camera}, Lighting: ${lighting}, Motion: ${motion}, Aspect Ratio: ${aspectRatio}. Photorealistic cinematic render.`.trim();
 
     try {
+      const model = selectedModel || "agnes-video-2.5-flash";
+      const isImg2Video = !!referenceDataUri || (!!referenceImageUrl && referenceImageUrl.startsWith("http"));
+      const firstFrame = referenceDataUri || (referenceImageUrl?.trim() || undefined);
+
       const payload: any = {
-        model: selectedModel || "agnes-video-v2.0",
+        model,
         prompt: fullPrompt,
-        duration: durationSeconds
+        mode: isImg2Video ? "img2video" : "text",
+        seconds: durationSeconds,
+        size: "720P",
+        aspect_ratio: aspectRatio || "16:9",
+        n: 1,
+        ...(isImg2Video && firstFrame ? { first_frame: firstFrame } : {}),
       };
 
       console.log(`[Diagnostic] VideoStudio starting generation. Job params:`, {
         duration: durationSeconds,
         model: payload.model,
+        mode: payload.mode,
         prompt: fullPrompt.substring(0, 50) + "...",
       });
-
-      if (referenceDataUri) {
-        payload.image = referenceDataUri;
-      } else if (referenceImageUrl && referenceImageUrl.startsWith("http")) {
-        payload.image = referenceImageUrl.trim();
-      }
 
       const res = await fetch("/api/agnes/videos/generations", {
         method: "POST",
@@ -260,18 +264,22 @@ export default function NormalVideoStudio() {
       });
 
       const resText = await res.text();
-      if (!res.ok) {
-        throw new Error(safeExtractError(resText, res.status));
-      }
+      let data: any = {};
+      try {
+        data = JSON.parse(resText);
+      } catch {}
 
-      const data = JSON.parse(resText);
+      if (!res.ok) {
+        const errorMsg = data?.error?.message || (typeof data?.error === "string" ? data.error : null) || data?.message || safeExtractError(resText, res.status);
+        throw new Error(errorMsg);
+      }
       const vId = data.video_id || data.id || data.task_id || `vid_${Date.now()}`;
       const tId = data.task_id || data.id || data.video_id || vId;
 
       const newJobId = createJob({
         type: "video",
         tool: "Normal Video",
-        model: selectedModel || "agnes-video-v2.0",
+        model,
         prompt: fullPrompt,
         duration: durationSeconds,
         inputUri: referenceDataUri || referenceImageUrl || undefined,
@@ -289,11 +297,19 @@ export default function NormalVideoStudio() {
       const cleanErr = safeExtractError(rawErrMsg);
       const lower = cleanErr.toLowerCase();
 
+      const isPlanQuota =
+        lower.includes("token plan") ||
+        lower.includes("free users") ||
+        lower.includes("insufficient quota") ||
+        lower.includes("credit balance");
+
       const isQueueFull = 
-        lower.includes("queue is full") || 
-        lower.includes("rate limit") || 
-        lower.includes("2 requests per 1 minute") || 
-        lower.includes("429");
+        !isPlanQuota && (
+          lower.includes("queue is full") || 
+          lower.includes("2 requests per 1 minute") || 
+          lower.includes("1 requests per 1 minute") || 
+          lower.includes("network capacity")
+        );
 
       if (isQueueFull) {
         setIsQueueFullError(true);
@@ -301,6 +317,7 @@ export default function NormalVideoStudio() {
         setRetryCountdown(45);
       } else {
         setIsQueueFullError(false);
+        setRetryCountdown(null);
         setErrorMsg(cleanErr);
       }
     }
@@ -430,6 +447,7 @@ export default function NormalVideoStudio() {
                   className="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-2.5 py-1.5 text-xs text-white focus:outline-none focus:border-indigo-500"
                 >
                   <option value="agnes-video-v2.0">Agnes Video V2.0 (Ultra)</option>
+                  <option value="agnes-video-2.5-flash">Agnes Video V2.5 Flash</option>
                   <option value="agnes-video-v1">Agnes Video V1.0 (Standard)</option>
                 </select>
               </div>
@@ -466,7 +484,14 @@ export default function NormalVideoStudio() {
                 ) : (
                   <>
                     <Sparkles className="w-4 h-4" />
-                    <span>Generate Video with {selectedModel === "agnes-video-v2.0" ? "Agnes V2.0" : "Agnes V1.0"}</span>
+                    <span>
+                      Generate Video with{" "}
+                      {selectedModel === "agnes-video-v2.0"
+                        ? "Agnes V2.0 (Ultra)"
+                        : selectedModel === "agnes-video-2.5-flash"
+                        ? "Agnes V2.5 Flash"
+                        : "Agnes Video"}
+                    </span>
                   </>
                 )}
               </button>
@@ -534,6 +559,21 @@ export default function NormalVideoStudio() {
                 <button onClick={() => setErrorMsg(null)} className="font-bold hover:text-white">✕</button>
               </div>
             )}
+
+            {/* Development Request Inspection */}
+            <div className="p-3 rounded-2xl bg-black/40 border border-white/5 text-[11px] font-mono text-zinc-400 space-y-1.5">
+              <div className="flex items-center justify-between text-zinc-300 font-semibold border-b border-white/5 pb-1">
+                <span>VIDEO REQUEST</span>
+                <span className="text-[10px] text-indigo-400 bg-indigo-500/10 px-1.5 py-0.5 rounded border border-indigo-500/20">DEV INSPECTOR</span>
+              </div>
+              <div className="space-y-0.5 text-[10px]">
+                <div><span className="text-zinc-500">endpoint:</span> <span className="text-zinc-300">/api/agnes/videos/generations</span></div>
+                <div><span className="text-zinc-500">model:</span> <span className="text-indigo-300">{selectedModel}</span></div>
+                <div><span className="text-zinc-500">mode:</span> <span className="text-emerald-300">{referenceDataUri || referenceImageUrl ? "img2video" : "text"}</span></div>
+                <div><span className="text-zinc-500">content-type:</span> <span className="text-amber-300">application/json</span></div>
+                <div className="truncate"><span className="text-zinc-500">payload keys:</span> <span className="text-zinc-400">{["prompt", "model", "mode", "seconds", "size", "aspect_ratio", ...(referenceDataUri || referenceImageUrl ? ["first_frame"] : [])].join(", ")}</span></div>
+              </div>
+            </div>
 
           </div>
         </div>
